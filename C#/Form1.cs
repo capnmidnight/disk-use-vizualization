@@ -16,6 +16,15 @@ namespace DiskUseViz
         {
             InitializeComponent();
             textBox1.Text = @"C:\Documents and Settings\Sean\My Documents\Dropbox";
+            Disposed += Form1_Disposed;
+        }
+
+        void Form1_Disposed(object sender, EventArgs e)
+        {
+            if (pictureBox1.Image != null)
+            {
+                pictureBox1.Image.Dispose();
+            }
         }
 
         private void textBox1_DoubleClick(object sender, EventArgs e)
@@ -27,7 +36,11 @@ namespace DiskUseViz
 
         private void button1_Click(object sender, EventArgs e)
         {
-            var img = RenderImage(textBox1.Text, pictureBox1.Size);
+            if (pictureBox1.Image != null)
+            {
+                pictureBox1.Image.Dispose();
+            }
+            var img = RenderImage(new DirectoryInfo(textBox1.Text), pictureBox1.Size);
             pictureBox1.Image = img;
         }
 
@@ -38,37 +51,57 @@ namespace DiskUseViz
             else
                 progressBar1.Value = Math.Max(progressBar1.Minimum, Math.Min(progressBar1.Maximum, i));
         }
+
+        private static string MakeName(FileSystemInfo obj)
+        {
+            var sb = new StringBuilder();
+            var temp = obj;
+            while (temp != null)
+            {
+                if (sb.Length > 0)
+                    sb.Insert(0, '/');
+                sb.Insert(0, temp.Name);
+                if (temp is DirectoryInfo)
+                {
+                    temp = ((DirectoryInfo)temp).Parent;
+                }
+                else if (temp is FileInfo)
+                {
+                    temp = ((FileInfo)temp).Directory;
+                }
+            }
+            return sb.ToString();
+        }
+
         Dictionary<Color, string> pickKeys = new Dictionary<Color, string>();
-        private Image RenderImage(string root, Size size)
+        private Image RenderImage(DirectoryInfo root, Size size)
         {
             var dirSizes = new Dictionary<string, double>();
-            var dirs = new List<string>();
+            var dirs = new List<FileSystemInfo>();
             dirs.Add(root);
             int p = 0;
             int len = 1;
             while (dirs.Count > 0)
             {
                 Progress(p++ * 100 / len);
-                var dir = dirs[0];
+                var dir = (DirectoryInfo)dirs[0];
                 dirs.RemoveAt(0);
-                var di = new DirectoryInfo(dir);
-                if (di.Exists)
+                if (dir.Exists)
                 {
                     try
                     {
-                        var subDirs = Directory.GetDirectories(dir);
+                        var subDirs = dir.GetDirectories();
                         len += subDirs.Length;
                         dirs.AddRange(subDirs);
-                        dirSizes.Add(di.FullName, 0);
-                        var dirFiles = Directory.GetFiles(dir);
-                        foreach (var f in dirFiles)
+                        dirSizes.Add(MakeName(dir), 0);
+                        var dirFiles = dir.GetFiles();
+                        foreach (var fi in dirFiles)
                         {
-                            var fi = new FileInfo(f);
-                            dirSizes.Add(fi.FullName, fi.Length);
-                            var next = di;
-                            while (next != null && dirSizes.ContainsKey(next.FullName))
+                            dirSizes.Add(MakeName(fi), fi.Length);
+                            var next = dir;
+                            while (next != null && dirSizes.ContainsKey(MakeName(next)))
                             {
-                                dirSizes[next.FullName] += fi.Length;
+                                dirSizes[MakeName(next)] += fi.Length;
                                 next = next.Parent;
                             }
                         }
@@ -80,40 +113,45 @@ namespace DiskUseViz
             var img = new Bitmap(size.Width, size.Height);
             dirs.Add(root);
             var rects = new Dictionary<string, Rectangle>();
-            rects.Add(root, new Rectangle(0, 0, size.Width, size.Height));
+            rects.Add(MakeName(root), new Rectangle(0, 0, size.Width, size.Height));
             len = dirs.Count;
             while (dirs.Count > 0)
             {
                 Progress(p++ * 100 / len);
                 var dir = dirs[0];
+                var dirName = MakeName(dir);
                 dirs.RemoveAt(0);
-                if (Directory.Exists(dir))
+                if (dir.Exists && dir is DirectoryInfo)
                 {
                     try
                     {
-                        var subDirs = Directory.GetDirectories(dir)
-                            .Select(d => new DirectoryInfo(d).FullName)
-                            .Union(Directory.GetFiles(dir)
-                                .Select(f => new FileInfo(f).FullName))
+                        var di = (DirectoryInfo)dir;
+                        var subDirs = di.GetDirectories()
+                            .Cast<FileSystemInfo>()
+                            .Union(di.GetFiles().Cast<FileSystemInfo>())
                             .ToArray();
-                        Array.Sort(subDirs, (di1, di2) =>
-                            dirSizes.ContainsKey(di1) && dirSizes.ContainsKey(di2)
-                            ? (int)(dirSizes[di2] - dirSizes[di1])
-                            : -1);
+                        Array.Sort(subDirs, (di1, di2) => {
+                            var n1 = MakeName(di1);
+                            var n2 = MakeName(di2);
+                            return dirSizes.ContainsKey(n1) && dirSizes.ContainsKey(n2)
+                                ? (int)(dirSizes[n2] - dirSizes[n1])
+                                : -1;
+                        });
                         dirs.AddRange(subDirs);
                         var flip = false;
-                        if (rects.ContainsKey(dir))
+                        if (rects.ContainsKey(dirName))
                         {
-                            var space = rects[dir];
+                            var space = rects[dirName];
                             foreach (var subDir in subDirs)
                             {
-                                if (dirSizes.ContainsKey(subDir) && dirSizes.ContainsKey(dir))
+                                var subDirName = MakeName(subDir);
+                                if (dirSizes.ContainsKey(subDirName) && dirSizes.ContainsKey(dirName))
                                 {
-                                    var percentage = dirSizes[subDir] / dirSizes[dir];
+                                    var percentage = dirSizes[subDirName] / dirSizes[dirName];
                                     int width = (int)(space.Width * (flip ? 1 : percentage));
                                     int height = (int)(space.Height * (flip ? percentage : 1));
                                     var subRect = new Rectangle(space.X, space.Y, width, height);
-                                    rects.Add(subDir, subRect);
+                                    rects.Add(subDirName, subRect);
                                     space = new Rectangle(
                                         space.X + (flip ? 0 : width),
                                         space.Y + (flip ? height : 0),
